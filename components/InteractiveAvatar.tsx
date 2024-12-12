@@ -1,45 +1,22 @@
 import type { StartAvatarResponse } from "@heygen/streaming-avatar";
 
-import StreamingAvatar, {
-  AvatarQuality,
-  StreamingEvents, TaskMode, TaskType, VoiceEmotion,
-} from "@heygen/streaming-avatar";
-import {
-  Button,
-  Card,
-  CardBody,
-  CardFooter,
-  Divider,
-  Input,
-  Select,
-  SelectItem,
-  Spinner,
-  Chip,
-  Tabs,
-  Tab,
-} from "@nextui-org/react";
+import StreamingAvatar, { AvatarQuality, StreamingEvents, TaskMode, TaskType, VoiceEmotion } from "@heygen/streaming-avatar";
+import { Button, Card, CardBody, Divider } from "@nextui-org/react";
 import { useEffect, useRef, useState } from "react";
-import { useMemoizedFn, usePrevious } from "ahooks";
+import { AiOutlineAudioMuted, AiOutlineAudio, AiOutlineQuestionCircle } from "react-icons/ai";
+import { IoMdClose } from "react-icons/io";
 
-import InteractiveAvatarTextInput from "./InteractiveAvatarTextInput";
-
-import {AVATARS, STT_LANGUAGE_LIST} from "@/app/lib/constants";
-
-export default function InteractiveAvatar() {
+export default function InteractiveAvatar({ chatBotStart, setChatBotStart }: { chatBotStart: boolean; setChatBotStart: React.Dispatch<React.SetStateAction<boolean>> }) {
   const [isLoadingSession, setIsLoadingSession] = useState(false);
-  const [isLoadingRepeat, setIsLoadingRepeat] = useState(false);
   const [stream, setStream] = useState<MediaStream>();
   const [debug, setDebug] = useState<string>();
-  const [knowledgeId, setKnowledgeId] = useState<string>("");
-  const [avatarId, setAvatarId] = useState<string>("");
-  const [language, setLanguage] = useState<string>('en');
-
   const [data, setData] = useState<StartAvatarResponse>();
-  const [text, setText] = useState<string>("");
   const mediaStream = useRef<HTMLVideoElement>(null);
   const avatar = useRef<StreamingAvatar | null>(null);
-  const [chatMode, setChatMode] = useState("text_mode");
   const [isUserTalking, setIsUserTalking] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const AVATAR_ID = process.env.NEXT_PUBLIC_AVATAR_ID || "";
+  const KNOWLEDGE_ID = process.env.NEXT_PUBLIC_KNOWLEDGE_ID || "";
 
   async function fetchAccessToken() {
     try {
@@ -47,8 +24,6 @@ export default function InteractiveAvatar() {
         method: "POST",
       });
       const token = await response.text();
-
-      console.log("Access Token:", token); // Log the token to verify
 
       return token;
     } catch (error) {
@@ -59,106 +34,91 @@ export default function InteractiveAvatar() {
   }
 
   async function startSession() {
+    console.log("Session started at:", new Date().toISOString());
     setIsLoadingSession(true);
     const newToken = await fetchAccessToken();
 
     avatar.current = new StreamingAvatar({
       token: newToken,
     });
-    avatar.current.on(StreamingEvents.AVATAR_START_TALKING, (e) => {
-      console.log("Avatar started talking", e);
+    avatar.current.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (event) => {
+      // アバターが喋るメッセージ
+      // console.log(event.detail.message);
     });
-    avatar.current.on(StreamingEvents.AVATAR_STOP_TALKING, (e) => {
-      console.log("Avatar stopped talking", e);
+    avatar.current.on(StreamingEvents.USER_TALKING_MESSAGE, (event) => {
+      // ユーザーが喋るメッセージ
+      // console.log(event.detail.message);
     });
+    avatar.current.on(StreamingEvents.AVATAR_STOP_TALKING, () => {});
     avatar.current.on(StreamingEvents.STREAM_DISCONNECTED, () => {
-      console.log("Stream disconnected");
       endSession();
     });
     avatar.current?.on(StreamingEvents.STREAM_READY, (event) => {
-      console.log(">>>>> Stream ready:", event.detail);
       setStream(event.detail);
     });
-    avatar.current?.on(StreamingEvents.USER_START, (event) => {
-      console.log(">>>>> User started talking:", event);
+    avatar.current?.on(StreamingEvents.USER_START, () => {
       setIsUserTalking(true);
     });
-    avatar.current?.on(StreamingEvents.USER_STOP, (event) => {
-      console.log(">>>>> User stopped talking:", event);
+    avatar.current?.on(StreamingEvents.USER_STOP, () => {
       setIsUserTalking(false);
     });
     try {
       const res = await avatar.current.createStartAvatar({
         quality: AvatarQuality.Low,
-        avatarName: avatarId,
-        knowledgeId: knowledgeId, // Or use a custom `knowledgeBase`.
+        avatarName: AVATAR_ID,
+        knowledgeId: KNOWLEDGE_ID,
         voice: {
-          rate: 1.5, // 0.5 ~ 1.5
+          rate: 1.0, // 0.5 ~ 1.5
           emotion: VoiceEmotion.EXCITED,
         },
-        language: language,
+        language: "ja",
+        disableIdleTimeout: true,
       });
 
       setData(res);
-      // default to voice mode
-      await avatar.current?.startVoiceChat();
-      setChatMode("voice_mode");
+      // 最初に喋らせる
+      await handleSpeak("フルミーへようこそ！なんでも聞いて下さい！");
+      // 音声チャットを開始
+      await avatar.current?.startVoiceChat({
+        useSilencePrompt: false,
+      });
     } catch (error) {
       console.error("Error starting avatar session:", error);
     } finally {
       setIsLoadingSession(false);
     }
   }
-  async function handleSpeak() {
-    setIsLoadingRepeat(true);
-    if (!avatar.current) {
-      setDebug("Avatar API not initialized");
-
-      return;
-    }
-    // speak({ text: text, task_type: TaskType.REPEAT })
-    await avatar.current.speak({ text: text, taskType: TaskType.REPEAT, taskMode: TaskMode.SYNC }).catch((e) => {
-      setDebug(e.message);
-    });
-    setIsLoadingRepeat(false);
-  }
-  async function handleInterrupt() {
-    if (!avatar.current) {
-      setDebug("Avatar API not initialized");
-
-      return;
-    }
+  async function handleSpeak(input: string) {
+    if (!avatar.current) return;
+    // await avatar.current?.stopListening();
     await avatar.current
-      .interrupt()
+      .speak({
+        text: input,
+        taskType: TaskType.REPEAT,
+        taskMode: TaskMode.SYNC,
+      })
       .catch((e) => {
         setDebug(e.message);
       });
+    // await avatar?.current?.startListening();
   }
+
   async function endSession() {
+    console.log("Session ended at:", new Date().toISOString());
     await avatar.current?.stopAvatar();
     setStream(undefined);
+    setChatBotStart(false);
   }
 
-  const handleChangeChatMode = useMemoizedFn(async (v) => {
-    if (v === chatMode) {
-      return;
-    }
-    if (v === "text_mode") {
-      avatar.current?.closeVoiceChat();
-    } else {
-      await avatar.current?.startVoiceChat();
-    }
-    setChatMode(v);
-  });
+  async function questionLink() {
+    window.open("", "_blank");
+  }
 
-  const previousText = usePrevious(text);
   useEffect(() => {
-    if (!previousText && text) {
-      avatar.current?.startListening();
-    } else if (previousText && !text) {
-      avatar?.current?.stopListening();
+    if (chatBotStart) {
+      startSession();
     }
-  }, [text, previousText]);
+  }, [chatBotStart]);
 
   useEffect(() => {
     return () => {
@@ -176,153 +136,67 @@ export default function InteractiveAvatar() {
     }
   }, [mediaStream, stream]);
 
+  const streamContent = stream ? (
+    <>
+      <div
+        className={`flex justify-center items-center rounded-lg overflow-hidden
+      w-full h-full sm:w-[300px] sm:h-auto relative
+    `}
+      >
+        <video
+          ref={mediaStream}
+          autoPlay
+          playsInline
+          className="w-full h-full object-fit-contain"
+          muted={isMuted}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+          }}
+        >
+          <track kind="captions" />
+        </video>
+      </div>
+      <div className="absolute top-3 right-3 bg-opacity-50 rounded-full p-2">
+        <Button className="text-white" size="md" variant="shadow" onClick={endSession}>
+          <IoMdClose />
+        </Button>
+      </div>
+      <div className="absolute bottom-3 right-3 rounded-full p-2">
+        <Button className="text-black bg-orange-200 " size="md" variant="shadow" onClick={() => setIsMuted(!isMuted)}>
+          {isMuted ? <AiOutlineAudioMuted /> : <AiOutlineAudio />}
+        </Button>
+      </div>
+      <div className="absolute bottom-3 left-3 bg-opacity-50 rounded-full p-2">
+        <Button className="text-white" size="md" variant="shadow" onClick={questionLink}>
+          <AiOutlineQuestionCircle />
+        </Button>
+      </div>
+    </>
+  ) : (
+    isLoadingSession && (
+      <div className="w-[300px] h-[200px] bg-gray-200 animate-pulse rounded-lg flex justify-center items-center">
+        <span className="text-gray-500">Loading...</span>
+      </div>
+    )
+  );
+
+  if (!chatBotStart) return null;
+
   return (
-    <div className="w-full flex flex-col gap-4">
-      <Card>
-        <CardBody className="h-[500px] flex flex-col justify-center items-center">
-          {stream ? (
-            <div className="h-[500px] w-[900px] justify-center items-center flex rounded-lg overflow-hidden">
-              <video
-                ref={mediaStream}
-                autoPlay
-                playsInline
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                }}
-              >
-                <track kind="captions" />
-              </video>
-              <div className="flex flex-col gap-2 absolute bottom-3 right-3">
-                <Button
-                  className="bg-gradient-to-tr from-indigo-500 to-indigo-300 text-white rounded-lg"
-                  size="md"
-                  variant="shadow"
-                  onClick={handleInterrupt}
-                >
-                  Interrupt task
-                </Button>
-                <Button
-                  className="bg-gradient-to-tr from-indigo-500 to-indigo-300  text-white rounded-lg"
-                  size="md"
-                  variant="shadow"
-                  onClick={endSession}
-                >
-                  End session
-                </Button>
-              </div>
-            </div>
-          ) : !isLoadingSession ? (
-            <div className="h-full justify-center items-center flex flex-col gap-8 w-[500px] self-center">
-              <div className="flex flex-col gap-2 w-full">
-                <p className="text-sm font-medium leading-none">
-                  Custom Knowledge ID (optional)
-                </p>
-                <Input
-                  placeholder="Enter a custom knowledge ID"
-                  value={knowledgeId}
-                  onChange={(e) => setKnowledgeId(e.target.value)}
-                />
-                <p className="text-sm font-medium leading-none">
-                  Custom Avatar ID (optional)
-                </p>
-                <Input
-                  placeholder="Enter a custom avatar ID"
-                  value={avatarId}
-                  onChange={(e) => setAvatarId(e.target.value)}
-                />
-                <Select
-                  placeholder="Or select one from these example avatars"
-                  size="md"
-                  onChange={(e) => {
-                    setAvatarId(e.target.value);
-                  }}
-                >
-                  {AVATARS.map((avatar) => (
-                    <SelectItem
-                      key={avatar.avatar_id}
-                      textValue={avatar.avatar_id}
-                    >
-                      {avatar.name}
-                    </SelectItem>
-                  ))}
-                </Select>
-                <Select
-                  label="Select language"
-                  placeholder="Select language"
-                  className="max-w-xs"
-                  selectedKeys={[language]}
-                  onChange={(e) => {
-                    setLanguage(e.target.value);
-                  }}
-                >
-                  {STT_LANGUAGE_LIST.map((lang) => (
-                    <SelectItem key={lang.key}>
-                      {lang.label}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-              <Button
-                className="bg-gradient-to-tr from-indigo-500 to-indigo-300 w-full text-white"
-                size="md"
-                variant="shadow"
-                onClick={startSession}
-              >
-                Start session
-              </Button>
-            </div>
-          ) : (
-            <Spinner color="default" size="lg" />
-          )}
-        </CardBody>
+    <div>
+      <Card
+        className={`
+        fixed bottom-0 right-0
+        rounded-none
+        w-full sm:w-auto sm:fixed sm:bottom-4 sm:right-4 sm:rounded-lg
+        ${chatBotStart ? "h-full sm:h-[500px]" : ""}
+      `}
+      >
+        <CardBody className="flex flex-col justify-center items-center">{streamContent}</CardBody>
         <Divider />
-        <CardFooter className="flex flex-col gap-3 relative">
-          <Tabs
-            aria-label="Options"
-            selectedKey={chatMode}
-            onSelectionChange={(v) => {
-              handleChangeChatMode(v);
-            }}
-          >
-            <Tab key="text_mode" title="Text mode" />
-            <Tab key="voice_mode" title="Voice mode" />
-          </Tabs>
-          {chatMode === "text_mode" ? (
-            <div className="w-full flex relative">
-              <InteractiveAvatarTextInput
-                disabled={!stream}
-                input={text}
-                label="Chat"
-                loading={isLoadingRepeat}
-                placeholder="Type something for the avatar to respond"
-                setInput={setText}
-                onSubmit={handleSpeak}
-              />
-              {text && (
-                <Chip className="absolute right-16 top-3">Listening</Chip>
-              )}
-            </div>
-          ) : (
-            <div className="w-full text-center">
-              <Button
-                isDisabled={!isUserTalking}
-                className="bg-gradient-to-tr from-indigo-500 to-indigo-300 text-white"
-                size="md"
-                variant="shadow"
-              >
-                {isUserTalking ? "Listening" : "Voice chat"}
-              </Button>
-            </div>
-          )}
-        </CardFooter>
       </Card>
-      <p className="font-mono text-right">
-        <span className="font-bold">Console:</span>
-        <br />
-        {debug}
-      </p>
     </div>
   );
 }
